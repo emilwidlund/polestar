@@ -2,10 +2,11 @@ import { openai } from "@ai-sdk/openai";
 import { Polar } from "@polar-sh/sdk";
 import { Polestar } from "./polestar";
 import { convertToCoreMessages, streamText } from "ai";
+import { NextRequest } from "next/server";
 
 interface UsageConfig {
 	accessToken: string;
-	getCustomerId: () => Promise<string>;
+	getCustomerId: (req: NextRequest) => Promise<string>;
 	server?: "sandbox" | "production";
 }
 
@@ -27,7 +28,7 @@ const Usage = ({ accessToken, getCustomerId, server }: UsageConfig) => {
 	});
 }
 
-export const POST = Usage({ accessToken: '', getCustomerId: (req) => '123' })
+export const POST = Usage({ accessToken: '', getCustomerId: async (req) => '123' })
 	.model(openai("gpt-4o"))
 	.increment("gpt-4o-input", (ctx) => ctx.usage.promptTokens)
 	.increment("gpt-4o-output", (ctx) => ctx.usage.completionTokens)

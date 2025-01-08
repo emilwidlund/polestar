@@ -10,15 +10,12 @@ import {
 	experimental_wrapLanguageModel as wrapLanguageModel,
 } from "ai";
 
-type Item = {
-	id: string;
-	name: string;
-	value: number;
+type Context = {
+	usage: {
+		promptTokens: number;
+		completionTokens: number;
+	};
 };
-
-type Context =
-	| LanguageModelV1StreamPart
-	| ReturnType<LanguageModelV1["doGenerate"]>;
 
 type Transformer = (ctx: Context) => number;
 
@@ -28,7 +25,7 @@ type NextHandler = (
 ) => Promise<NextResponse>;
 
 interface PolestarConfig {
-	customerId: string;
+	getCustomerId: (req: NextRequest) => Promise<string>;
 	billing: {
 		type?: "token";
 		meters: {
@@ -51,18 +48,20 @@ export class Polestar {
 	public model(model: LanguageModelV1) {
 		const meter = new PolestarMeter(this.client, model, {
 			type: "token",
-			customerId: this.config.customerId,
+			getCustomerId: this.config.getCustomerId,
 			meters: {
 				input: "input",
 				output: "output",
 			},
 		});
+
+		return meter;
 	}
 }
 
 interface PolestarMeterConfig {
 	type: "token";
-	customerId: string;
+	getCustomerId: (req: NextRequest) => Promise<string>;
 	meters: {
 		input?: string;
 		output?: string;
@@ -84,43 +83,41 @@ class PolestarMeter {
 		this.config = config;
 	}
 
-	public async increment(
-		itemName: string,
-		transformer: Transformer,
-	): Promise<this> {
+	public increment(itemName: string, transformer: Transformer) {
 		return this;
 	}
 
-	public async decrement(
-		itemName: string,
-		transformer: Transformer,
-	): Promise<this> {
+	public decrement(itemName: string, transformer: Transformer) {
 		return this;
 	}
 
-	private bill = async ({
-		promptTokens,
-		completionTokens,
-	}: {
-		promptTokens: number;
-		completionTokens: number;
-	}) => {
-		if (this.config.meters.input) {
-			await this.client.meterEvents.create({
-				event: this.config.meters.input,
-				customerId: this.config.customerId,
-				value: promptTokens.toString(),
-			});
-		}
+	private async createBillingHandler(req: NextRequest) {
+		const customerId = await this.config.getCustomerId(req);
 
-		if (this.config.meters.output) {
-			await this.client.meterEvents.create({
-				event: this.config.meters.output,
-				customerId: this.config.customerId,
-				value: completionTokens.toString(),
-			});
-		}
-	};
+		return async ({
+			promptTokens,
+			completionTokens,
+		}: {
+			promptTokens: number;
+			completionTokens: number;
+		}) => {
+			if (this.config.meters.input) {
+				await this.client.meterEvents.create({
+					event: this.config.meters.input,
+					customerId,
+					value: promptTokens.toString(),
+				});
+			}
+
+			if (this.config.meters.output) {
+				await this.client.meterEvents.create({
+					event: this.config.meters.output,
+					customerId,
+					value: completionTokens.toString(),
+				});
+			}
+		};
+	}
 
 	public run(
 		callback: (
@@ -131,61 +128,79 @@ class PolestarMeter {
 		return async (req: NextRequest, res: NextResponse) => {
 			const model = wrapLanguageModel({
 				model: this.model,
-				middleware: this.middleware(),
+				middleware: await this.middleware(req),
 			});
 
 			return callback(req, model);
 		};
 	}
 
-	public middleware(): LanguageModelV1Middleware {
+	public async middleware(
+		req: NextRequest,
+	): Promise<LanguageModelV1Middleware> {
+		const bill = await this.createBillingHandler(req);
+
 		return {
-			wrapGenerate: this.wrapGenerate,
-			wrapStream: this.wrapStream,
+			wrapGenerate: this.wrapGenerate(bill),
+			wrapStream: this.wrapStream(bill),
 		};
 	}
 
-	private async wrapGenerate(options: {
-		doGenerate: () => ReturnType<LanguageModelV1["doGenerate"]>;
-		params: LanguageModelV1CallOptions;
-		model: LanguageModelV1;
-	}): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> {
-		const result = await options.doGenerate();
+	private wrapGenerate(
+		bill: (usage: {
+			promptTokens: number;
+			completionTokens: number;
+		}) => Promise<void>,
+	) {
+		return async (options: {
+			doGenerate: () => ReturnType<LanguageModelV1["doGenerate"]>;
+			params: LanguageModelV1CallOptions;
+			model: LanguageModelV1;
+		}): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> => {
+			const result = await options.doGenerate();
 
-		await this.bill(result.usage);
+			await bill(result.usage);
 
-		return result;
+			return result;
+		};
 	}
 
-	private async wrapStream({
-		doStream,
-		params,
-		model,
-	}: {
-		doStream: () => ReturnType<LanguageModelV1["doStream"]>;
-		params: LanguageModelV1CallOptions;
-		model: LanguageModelV1;
-	}): Promise<Awaited<ReturnType<LanguageModelV1["doStream"]>>> {
-		const { stream, ...rest } = await doStream();
+	private wrapStream(
+		bill: (usage: {
+			promptTokens: number;
+			completionTokens: number;
+		}) => Promise<void>,
+	) {
+		return async ({
+			doStream,
+			params,
+			model,
+		}: {
+			doStream: () => ReturnType<LanguageModelV1["doStream"]>;
+			params: LanguageModelV1CallOptions;
+			model: LanguageModelV1;
+		}) => {
+			const { stream, ...rest } = await doStream();
 
-		const transformStream = new TransformStream<
-			LanguageModelV1StreamPart,
-			LanguageModelV1StreamPart
-		>({
-			async transform(chunk, controller) {
-				if (chunk.type === "finish") {
-					if (this.config.billing) {
-						await this.bill(chunk.usage);
+			const transformStream = new TransformStream<
+				LanguageModelV1StreamPart,
+				LanguageModelV1StreamPart
+			>({
+				async transform(chunk, controller) {
+					if (chunk.type === "finish") {
+						if (this.config.billing) {
+							await bill(chunk.usage);
+						}
 					}
-				}
 
-				controller.enqueue(chunk);
-			},
-		});
+					controller.enqueue(chunk);
+				},
+			});
 
-		return {
-			stream: stream.pipeThrough(transformStream),
-			...rest,
+			return {
+				stream: stream.pipeThrough(transformStream),
+				...rest,
+			};
 		};
 	}
 }
