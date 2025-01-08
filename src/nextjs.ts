@@ -25,22 +25,11 @@ const Usage = ({ accessToken, getCustomerId, server }: UsageConfig) => {
 			},
 		},
 	});
-};
+}
 
-const config = { accessToken: "test", getCustomerId: async () => "123" };
-
-export const POST = Usage(config)
+export const POST = Usage({ accessToken: '', getCustomerId: (req) => '123' })
 	.model(openai("gpt-4o"))
 	.increment("gpt-4o-input", (ctx) => ctx.usage.promptTokens)
 	.increment("gpt-4o-output", (ctx) => ctx.usage.completionTokens)
-	.run(async (req, model) => {
-		const { messages } = await req.json();
-
-		const result = await streamText({
-			model: model,
-			system: SYSTEM_PROMPT,
-			messages: convertToCoreMessages(messages),
-		});
-
-		return result.toDataStreamResponse();
-	});
+	.decrement('gpt-4o-included-calls', 1)
+	.run(async (req, model) => /** Do your usual AI model stuff */);

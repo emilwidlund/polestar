@@ -1,12 +1,12 @@
-import {
+import type {
 	LanguageModelV1,
 	LanguageModelV1CallOptions,
 	LanguageModelV1StreamPart,
 } from "@ai-sdk/provider";
-import { Polar } from "@polar-sh/sdk";
-import { NextRequest, NextResponse } from "next/server";
+import type { Polar } from "@polar-sh/sdk";
+import type { NextRequest, NextResponse } from "next/server";
 import {
-	Experimental_LanguageModelV1Middleware as LanguageModelV1Middleware,
+	type Experimental_LanguageModelV1Middleware as LanguageModelV1Middleware,
 	experimental_wrapLanguageModel as wrapLanguageModel,
 } from "ai";
 
@@ -28,7 +28,7 @@ type NextHandler = (
 ) => Promise<NextResponse>;
 
 interface PolestarConfig {
-	getCustomerId: (req: NextRequest) => Promise<string>;
+	customerId: string;
 	billing: {
 		type?: "token";
 		meters: {
@@ -49,25 +49,20 @@ export class Polestar {
 	}
 
 	public model(model: LanguageModelV1) {
-		const meter = new PolestarMeter(this.client, {
+		const meter = new PolestarMeter(this.client, model, {
 			type: "token",
-			customer: "test",
+			customerId: this.config.customerId,
 			meters: {
 				input: "input",
 				output: "output",
 			},
-		});
-
-		return wrapLanguageModel({
-			model,
-			middleware: meter.middleware(),
 		});
 	}
 }
 
 interface PolestarMeterConfig {
 	type: "token";
-	customer: string;
+	customerId: string;
 	meters: {
 		input?: string;
 		output?: string;
@@ -76,10 +71,16 @@ interface PolestarMeterConfig {
 
 class PolestarMeter {
 	private client: Polar;
+	private model: LanguageModelV1;
 	private config: PolestarMeterConfig;
 
-	constructor(client: Polar, config: PolestarMeterConfig) {
+	constructor(
+		client: Polar,
+		model: LanguageModelV1,
+		config: PolestarMeterConfig,
+	) {
 		this.client = client;
+		this.model = model;
 		this.config = config;
 	}
 
@@ -107,7 +108,7 @@ class PolestarMeter {
 		if (this.config.meters.input) {
 			await this.client.meterEvents.create({
 				event: this.config.meters.input,
-				customerId: await this.config.getCustomerId(),
+				customerId: this.config.customerId,
 				value: promptTokens.toString(),
 			});
 		}
@@ -115,20 +116,25 @@ class PolestarMeter {
 		if (this.config.meters.output) {
 			await this.client.meterEvents.create({
 				event: this.config.meters.output,
-				customerId: await this.config.getCustomerId(),
+				customerId: this.config.customerId,
 				value: completionTokens.toString(),
 			});
 		}
 	};
 
-	public handler(): NextHandler {
+	public run(
+		callback: (
+			req: NextRequest,
+			model: LanguageModelV1,
+		) => Promise<NextResponse>,
+	): NextHandler {
 		return async (req: NextRequest, res: NextResponse) => {
-			const { messages } = await req.json();
+			const model = wrapLanguageModel({
+				model: this.model,
+				middleware: this.middleware(),
+			});
 
-			for (const transformer of this.transformers) {
-				const result = transformer({ request: req });
-			}
-			return NextResponse.json({ message: "Hello world" });
+			return callback(req, model);
 		};
 	}
 
