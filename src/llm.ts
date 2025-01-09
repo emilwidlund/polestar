@@ -3,7 +3,7 @@ import type {
 	LanguageModelV1CallOptions,
 	LanguageModelV1StreamPart,
 } from "@ai-sdk/provider";
-import { PolestarMeter, PolestarMeterContext } from "./meter";
+import { PolestarMeter, type PolestarMeterContext } from "./meter";
 import {
 	experimental_wrapLanguageModel as wrapLanguageModel,
 	type Experimental_LanguageModelV1Middleware as LanguageModelV1Middleware,
@@ -23,19 +23,15 @@ interface PolestarLLMContext extends PolestarMeterContext {
 
 export class PolestarLLMMeter<TRequest> {
 	private model: LanguageModelV1;
-	private inputMeter: PolestarMeter<PolestarLLMContext>;
-	private outputMeter: PolestarMeter<PolestarLLMContext>;
+	private meter: PolestarMeter<PolestarLLMContext>;
 	private getCustomerId?: (req: TRequest) => Promise<string> | undefined;
 
-	constructor(
-		model: LanguageModelV1,
-	) {
+	constructor(model: LanguageModelV1) {
 		this.model = model;
-		this.inputMeter = new PolestarMeter<PolestarLLMContext>();
-		this.outputMeter = new PolestarMeter<PolestarLLMContext>();
+		this.meter = new PolestarMeter<PolestarLLMContext>();
 	}
 
-	public customerId(callback: (req: TRequest) => Promise<string>) {
+	public customer(callback: (req: TRequest) => Promise<string>) {
 		this.getCustomerId = callback;
 
 		return this;
@@ -43,20 +39,19 @@ export class PolestarLLMMeter<TRequest> {
 
 	public increment(
 		meter: string,
-		type: "input" | "output",
 		transformer: (ctx: PolestarLLMContext) => number,
 	) {
-		if (type === "output") {
-			this.outputMeter.increment(meter, transformer);
-		} else {
-			this.inputMeter.increment(meter, transformer);
-		}
+		this.meter.increment(meter, transformer);
 
 		return this;
 	}
 
 	public handler<TResponse>(
-		callback: (req: TRequest, res: TResponse, model: LanguageModelV1) => Promise<TResponse>,
+		callback: (
+			req: TRequest,
+			res: TResponse,
+			model: LanguageModelV1,
+		) => Promise<TResponse>,
 	): Handler<TRequest, TResponse> {
 		return async (req: TRequest, res: TResponse) => {
 			const model = wrapLanguageModel({
@@ -69,7 +64,7 @@ export class PolestarLLMMeter<TRequest> {
 	}
 
 	private async middleware(req: TRequest): Promise<LanguageModelV1Middleware> {
-		const meter = await this.createMeterHandler(req);
+		const meter = await this.createMeterHandler();
 
 		return {
 			wrapGenerate: this.wrapGenerate(meter, req),
@@ -77,14 +72,16 @@ export class PolestarLLMMeter<TRequest> {
 		};
 	}
 
-	private async createMeterHandler(req: TRequest) {
-		return async (context: PolestarLLMContext) => {	
-			await this.inputMeter.run(context);
-			await this.outputMeter.run(context);
+	private async createMeterHandler() {
+		return async (context: PolestarLLMContext) => {
+			await this.meter.run(context);
 		};
 	}
 
-	private wrapGenerate(meter: (context: PolestarLLMContext) => Promise<void>, req: TRequest) {
+	private wrapGenerate(
+		meter: (context: PolestarLLMContext) => Promise<void>,
+		req: TRequest,
+	) {
 		return async (options: {
 			doGenerate: () => ReturnType<LanguageModelV1["doGenerate"]>;
 			params: LanguageModelV1CallOptions;
@@ -92,13 +89,19 @@ export class PolestarLLMMeter<TRequest> {
 		}): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> => {
 			const result = await options.doGenerate();
 
-			await meter({ usage: result.usage, customerId: await this.getCustomerId?.(req) ?? "" });
+			await meter({
+				usage: result.usage,
+				customerId: (await this.getCustomerId?.(req)) ?? "",
+			});
 
 			return result;
 		};
 	}
 
-	private wrapStream(meter: (context: PolestarLLMContext) => Promise<void>, req: TRequest) {
+	private wrapStream(
+		meter: (context: PolestarLLMContext) => Promise<void>,
+		req: TRequest,
+	) {
 		return async ({
 			doStream,
 			params,
@@ -116,7 +119,10 @@ export class PolestarLLMMeter<TRequest> {
 			>({
 				transform: async (chunk, controller) => {
 					if (chunk.type === "finish") {
-						await meter({ usage: chunk.usage, customerId: await this.getCustomerId?.(req) ?? "" });
+						await meter({
+							usage: chunk.usage,
+							customerId: (await this.getCustomerId?.(req)) ?? "",
+						});
 					}
 
 					controller.enqueue(chunk);
