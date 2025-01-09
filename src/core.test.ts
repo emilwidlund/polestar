@@ -1,25 +1,24 @@
-import { expect, test, vi } from "vitest";
+import { expect, describe, it, vi } from "vitest";
 import { Polestar } from "./core";
+import { filter } from "rxjs";
+import { createMocks } from "node-mocks-http";
 
-test("Polestar", async () => {
-	const polestar = new Polestar();
+describe("Polestar", () => {
+	it("should run callback", async () => {
+		const polestar = new Polestar();
 
-	const incrementUsage = vi.fn();
-	const decrementUsage = vi.fn();
-	const setUsage = vi.fn();
-	const logEvent = vi.fn();
+		const callback = vi.fn();
 
-	await polestar
-		.pipe(incrementUsage)
-		.pipe(decrementUsage)
-		.pipe(setUsage)
-		.pipe(logEvent)
-		.run({ usage: { promptTokens: 100, completionTokens: 100 } });
+		const handler = polestar
+			.pipe(filter(([req, res]) => req.url === ""))
+			.handler(callback);
 
-	const expectedUsage = { usage: { promptTokens: 100, completionTokens: 100 } };
+		const { req, res } = createMocks({
+			method: "GET",
+		});
 
-	expect(incrementUsage).toHaveBeenCalledWith(expectedUsage);
-	expect(decrementUsage).toHaveBeenCalledWith(expectedUsage);
-	expect(setUsage).toHaveBeenCalledWith(expectedUsage);
-	expect(logEvent).toHaveBeenCalledWith(expectedUsage);
+		handler(req, res);
+
+		expect(callback).toHaveBeenCalled();
+	});
 });

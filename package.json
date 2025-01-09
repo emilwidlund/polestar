@@ -10,7 +10,8 @@
 	"author": "",
 	"license": "Apache-2.0",
 	"dependencies": {
-		"@polar-sh/sdk": "^0.20.2"
+		"@polar-sh/sdk": "^0.20.2",
+		"rxjs": "^7.8.1"
 	},
 	"devDependencies": {
 		"@ai-sdk/openai": "^1.0.15",
@@ -19,6 +20,7 @@
 		"@sindresorhus/tsconfig": "^7.0.0",
 		"ai": "^4.0.30",
 		"next": "^15.1.4",
+		"node-mocks-http": "^1.16.2",
 		"vitest": "^2.1.8"
 	},
 	"peerDependencies": {

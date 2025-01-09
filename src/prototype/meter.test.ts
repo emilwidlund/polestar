@@ -13,9 +13,9 @@ test("Polestar", async () => {
 	const logEvent = vi.fn();
 
 	await polestar
-		.increment(incrementUsage)
-		.decrement(decrementUsage)
-		.set(setUsage)
+		.increment("input", incrementUsage)
+		.decrement("output", decrementUsage)
+		.set("input", setUsage)
 		.pipe(logEvent)
 		.run({ usage: { promptTokens: 100, completionTokens: 100 } });
 
