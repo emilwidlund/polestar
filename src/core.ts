@@ -1,30 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
-import { of, type OperatorFunction, first } from "rxjs";
+export type Transformer<T> = (ctx: T) => Promise<void>;
 
-export class Polestar {
-	private operators: OperatorFunction<
-		[NextRequest, NextResponse],
-		[NextRequest, NextResponse]
-	>[] = [];
+export class Polestar<T> {
+	transformers: Transformer<T>[] = [];
 
-	pipe(
-		...operators: OperatorFunction<
-			[NextRequest, NextResponse],
-			[NextRequest, NextResponse]
-		>[]
-	): this {
-		this.operators.push(...operators);
+	public pipe(transformer: Transformer<T>) {
+		this.transformers.push(transformer);
+
 		return this;
 	}
 
-	handler(callback: (req: NextRequest, res: NextResponse) => NextResponse) {
-		return (req: NextRequest, res: NextResponse): void => {
-			of([req, res] as const)
-				.pipe(first())
-				.pipe(...this.operators)
-				.subscribe({
-					next: ([request, response]) => callback(request, response),
-				});
-		};
+	public async run(ctx: T) {
+		await Promise.all(this.transformers.map((transformer) => transformer(ctx)));
 	}
 }
